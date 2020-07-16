@@ -471,6 +471,9 @@ def calculate_entailment(hypo_tuples, premise_tuples, word_vectors):
 # Validation SET RTE
 rte_valset_filename = 'E:/Università Magistrale/Tesi/RTE_files/rte_valset.jsonl'
 
+# Predizioni Hugging Face
+huggingface_preds_filename = 'E:/Università Magistrale/Tesi/RTE_files/rte_preds_roberta_large.txt'
+
 print('Caricamento modello spaCy, l\'operazione richiederà qualche secondo.')
 nlp = spacy.load("en_core_web_lg")
 
@@ -490,17 +493,43 @@ word_vectors = api.load("word2vec-google-news-300")  # load pre-trained word-vec
 word_vectors.init_sims(replace=True)
 print('Caricamento completato. Inizio calcolo nessi causali degli esempi del validation set.')
 
+# Carico il file di predizioni Hugging Face per poi effettuare i vari confronti
+with open(huggingface_preds_filename) as f:
+    hugging_face_preds = f.read().split()
+
+# Trasformo il vettore in "entailment" e "not_entailment"
+i = 0
+for pred in hugging_face_preds:
+    if int(pred) == 1:
+        hugging_face_preds[i] = 'not_entailment'
+    else:
+        hugging_face_preds[i] = 'entailment'
+    i += 1
+
 # Prelevo una linea del validation set, ogni linea sarà un esempio premessa-ipotesi
 with jsonlines.open(rte_valset_filename) as json_file:
 
     # I-esimo esempio, conteggio di match fra entailment originale e calcolato, numero righe file
     i = 0
     matches = 0
+    matches_hf = 0
     n = 277
 
     # Contatore di comodità per stampare percentuale di progresso
     perc = n / 100
     j = 10
+
+    # Contatori per i casi di entailment algoritmo e hugging face
+    matches_1 = 0
+    matches_2 = 0
+    matches_3 = 0
+    matches_4 = 0
+    matches_1_hf = 0
+    matches_2_hf = 0
+    matches_3_hf = 0
+    matches_4_hf = 0
+    better_1 = 0
+    better_2 = 0
 
     for line in json_file.iter():
         hypothesis = get_dependences(nlp(line['hypothesis']))
@@ -545,7 +574,9 @@ with jsonlines.open(rte_valset_filename) as json_file:
             # Calcolo entailment
             label = calculate_entailment(hypo_tuple, sub_premises_array, word_vectors)
 
-            # Conto se ho un match corretto
+            # Conto se ho un match corretto (il flag è per gestire i casi di match)
+            match = False
+            match_hf = False
             original_label = False
             output_label = 'not_entailment'
 
@@ -556,13 +587,63 @@ with jsonlines.open(rte_valset_filename) as json_file:
                 original_label = True
             if original_label == label:
                 matches += 1
+                match = True
+
+            # Matching di hugging face
+            if hugging_face_preds[i] == 'entailment' and original_label:
+                matches_hf += 1
+                match_hf = True
+            elif hugging_face_preds[i] == 'not_entailment' and not original_label:
+                matches_hf += 1
+                match_hf = True
+
+            # Calcolo uno dei 4 casi di combinazione delle etichette del mio algoritmo
+            entailment_case = 0
+            if original_label:
+                if label:
+                    entailment_case = 1
+                    matches_1 += 1
+                else:
+                    entailment_case = 2
+                    matches_2 += 1
+            else:
+                if label:
+                    entailment_case = 3
+                    matches_3 += 1
+                else:
+                    entailment_case = 4
+                    matches_4 += 1
+
+            # Calcolo uno dei 4 casi di combinazione delle etichette di Hugging Face
+            hf_entailment_case = 0
+            if original_label:
+                if hugging_face_preds[i] in 'entailment':
+                    hf_entailment_case = 1
+                    matches_1_hf += 1
+                else:
+                    hf_entailment_case = 2
+                    matches_2_hf += 1
+            else:
+                if hugging_face_preds[i] in 'entailment':
+                    hf_entailment_case = 3
+                    matches_3_hf += 1
+                else:
+                    hf_entailment_case = 4
+                    matches_4_hf += 1
+
+            # Casi dove il mio algoritmo indovina mentre Hugging Face no (per entailment e not_entailment
+            if match and not match_hf:
+                if entailment_case == 1:
+                    better_1 += 1
+                else:
+                    better_2 += 1
 
             premises_array.append(sub_premises_array)
             sub_premises_array = []
 
         # Appendo una riga CSV al file
         with open("C:/Users/Valerio/Desktop/results.csv", "a") as out:
-            print('', line['idx'], ';', line['premise'], ';', premises_array, ';', line['hypothesis'], ';', hypo_tuple, ';', line['label'], ';', output_label, file=out)
+            print('', line['idx'], ';', line['premise'], ';', premises_array, ';', line['hypothesis'], ';', hypo_tuple, ';', line['label'], ';', output_label, ';', entailment_case, ';', hugging_face_preds[i], ';', hf_entailment_case, file=out)
 
         premises = []
         premises_array = []
@@ -580,7 +661,20 @@ with jsonlines.open(rte_valset_filename) as json_file:
 # Stampo a video e nel file il risultato
 print('Numero di matches:', matches, '/', i)
 accuracy = matches/i
-print('Accuratezza', '{:.4f}'.format(accuracy))
+accuracy_hf = matches_hf/i
 with open("C:/Users/Valerio/Desktop/results.csv", "a") as out:
     print('Numero di matches:', matches, '/', i, file=out)
     print('Accuratezza', '{:.4f}'.format(accuracy), file=out)
+    print('Accuratezza HF', '{:.4f}'.format(accuracy_hf), file=out)
+    print('Casi di match mio algoritmo', file=out)
+    print('entailment/entailment:', matches_1, '/', n, file=out)
+    print('entailment/not_entailment:', matches_2, '/', n, file=out)
+    print('not_entailment/entailment:', matches_3, '/', n, file=out)
+    print('not_entailment/not_entailment:', matches_4, '/', n, file=out)
+    print('Casi di match hugging face', file=out)
+    print('entailment/entailment:', matches_1_hf, '/', n, file=out)
+    print('entailment/not_entailment:', matches_2_hf, '/', n, file=out)
+    print('not_entailment/entailment:', matches_3_hf, '/', n, file=out)
+    print('not_entailment/not_entailment:', matches_4_hf, '/', n, file=out)
+    print('Numero casi dove il mio algoritmo indovina e HF no con etichetta ENT', better_1, file=out)
+    print('Numero casi dove il mio algoritmo indovina e HF no con etichetta NOT_ENT', better_2, file=out)
